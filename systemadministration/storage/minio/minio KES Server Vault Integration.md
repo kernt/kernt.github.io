@@ -30,7 +30,7 @@ The Vault CLI needs to know the Vault endpoint:
     The Vault CLI needs an authentication token to perform operations.
     
 - ```sh
-    export VAULT_TOKEN=hvs.O6QNQB33ksXtMxtlRKlRZL0R
+    export VAULT_TOKEN="${VAULTTOKEN}"
     ```
     
     Replace the token value to your own Vault access token, such as the `Root token` provided in the output of the `vault server -dev` command.

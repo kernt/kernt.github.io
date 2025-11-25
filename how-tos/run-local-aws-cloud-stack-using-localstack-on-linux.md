@@ -159,7 +159,7 @@ docker run -d \
   -p 4566:4566 \
   -p 4510-4559:4510-4559 \
   -e AWS_ACCESS_KEY_ID=admin \
-  -e AWS_SECRET_ACCESS_KEY=Passw0rd \
+  -e AWS_SECRET_ACCESS_KEY=${AWSACCESKEY} \
   localstack/localstack
 ```
 
@@ -172,7 +172,7 @@ docker run -d \
   -p 4510-4559:4510-4559 \
   -e LOCALSTACK_API_KEY=LOCALSTACK_API_KEY \
   -e AWS_ACCESS_KEY_ID=admin \
-  -e AWS_SECRET_ACCESS_KEY=Passw0rd \
+  -e AWS_SECRET_ACCESS_KEY=${AWSACCESKEY} \
   localstack/localstack-pro
 ```
 

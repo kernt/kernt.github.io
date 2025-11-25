@@ -56,7 +56,7 @@ WantedBy=multi-user.target
 #--shared-links.sql.retention=0
 #                           The maximum retention time for shared links when using a SQL database (e.g. '10m', '12h'). Set to 0 for infinite retention.
 #--grafana.url="https://vmd36612.tail0c330.ts.net:3000"           The URL of your Grafana installation, to enable the Grafana datasource selector.
-#--grafana.api-token="eyJrIjoiRHBlUlRuODMwanpoUWdYV3R3M05YS1dyNXdweWw1TlEiLCJuIjoiZ3JhZmFuYXRva2VuMSIsImlkIjoxfQ=="     The auth token to pass to the Grafana API.
+#--grafana.api-token="${GRAFANAAPITOKEN}"     The auth token to pass to the Grafana API.
 #--grafana.api-token-file=""
 #                           A file containing the auth token to pass to the Grafana API.
 #--grafana.default-datasource-id=0
