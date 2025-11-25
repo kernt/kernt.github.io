@@ -1,0 +1,19 @@
+# prettier
+
+## example for ansible
+ 
+```yaml
+---
+printWidth: 160
+tabWidth: 2
+useTabs: false
+singleQuote: false
+quoteProps: as-needed
+jsxSingleQuote: false
+bracketSpacing: true
+parser: yaml
+endOfLine: lf
+```
+
+
+https://prettier.io/docs/configuration

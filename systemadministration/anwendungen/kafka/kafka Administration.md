@@ -1,0 +1,6 @@
+---
+tags:
+  - kafka
+  - cloud
+---
+https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=27846330

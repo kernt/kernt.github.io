@@ -1,0 +1,411 @@
+---
+tags:
+  - gitlab
+  - gitlab-ci
+---
+**Example für saltstack deployments**
+
+```yml
+# -*- coding: utf-8 -*-
+# vim: ft=yaml
+---
+###############################################################################
+# Define all YAML node anchors
+###############################################################################
+.node_anchors:
+  # `stage`
+  stage_lint: &stage_lint 'lint'
+  # `image`
+  image_precommit: &image_precommit
+    name: 'myii/ssf-pre-commit:2.9.2'
+    entrypoint: ['/bin/bash', '-c']
+  # `services`
+  services_docker_dind: &services_docker_dind
+    - 'docker:dind'
+###############################################################################
+# Define stages and global variables
+###############################################################################
+stages:
+  - *stage_lint
+variables:
+  DOCKER_DRIVER: 'overlay2'
+###############################################################################
+# `lint` stage: `pre-commit`
+###############################################################################
+pre-commit:
+  stage: *stage_lint
+  image: *image_precommit
+  # https://pre-commit.com/#gitlab-ci-example
+  variables:
+    PRE_COMMIT_HOME: '${CI_PROJECT_DIR}/.cache/pre-commit'
+  cache:
+    key: '${CI_JOB_NAME}'
+    paths:
+      - '${PRE_COMMIT_HOME}'
+  script:
+    - 'pre-commit run --all-files --color always --verbose'
+  tags:
+    - docker
+```
+
+CI_JOB_NAME = 
+
+**example image builder**
+
+```yml
+---
+###############################################################################
+# Define all YAML node anchors
+###############################################################################
+.node_anchors:
+  # `only` (also used for `except` where applicable)
+  only_branch_master_parent_repo: &only_branch_master_parent_repo
+    - 'master@salt/cicd/salt-image-builder'
+  # `stage`
+  stage_build: &stage_build 'build'
+  stage_lint: &stage_lint 'lint'
+  stage_release: &stage_release 'release'
+  # `image`
+  image_black: &image_black
+    name: 'cytopia/black:latest'
+    entrypoint: ['/bin/ash', '-c']
+  image_commitlint: &image_commitlint 'osregistry.os-fra.de/salt/ssf-commitlint:18'
+  # yamllint disable-line rule:line-length
+  image_dindpy3virtualenv: &image_dindpy3virtualenv 'myii/ssf-dind-py3-virtualenv:20.0.21-r0'
+  image_hadolint: &image_hadolint 'hadolint/hadolint:v2.12.0-alpine'
+  image_semantic-release: &image_semanticrelease 'myii/ssf-semantic-release-gitlab:17.3'
+  image_yamllint: &image_yamllint
+    name: 'cytopia/yamllint:latest'
+    entrypoint: ['/bin/ash', '-c']
+  # `script`
+  script_dind_push_to_docker_hub: &script_dind_push_to_docker_hub
+    - |
+      if [ "${CI_COMMIT_BRANCH}" = "master" ]; then
+        echo "Push to osregistry"
+        echo "${HARBOR_PASSWORD}" | \
+          docker login -u "${HARBOR_USERNAME}" --password-stdin ${HARBOR_URL}
+        docker tag ${TAG} ${HARBOR_HOST}/${HARBOR_PROJECT}/${DOCKERHUB_IMAGE}
+        docker push ${HARBOR_HOST}/${HARBOR_PROJECT}/${DOCKERHUB_IMAGE}
+      fi
+  # `services`
+  services_docker_dind: &services_docker_dind
+    - name: 'docker:dind'
+      command: ['--tls=false']
+###############################################################################
+# Define stages and global variables
+###############################################################################
+stages:
+  - *stage_lint
+  - *stage_build
+  - *stage_release
+variables:
+  DOCKER_DRIVER: 'overlay2'
+  DOCKER_HOST: 'tcp://docker:2375'
+  DOCKER_TLS_CERTDIR: ''
+  PKGS_VERSIONS_DIR: 'packages_versions/'
+  PKGS_VERSIONS_DIR_WIP: 'packages_versions_WIP/'
+###############################################################################
+# `lint` stage: `yamllint`, `black`, `hadolint` & `commitlint`
+###############################################################################
+yamllint:
+  stage: *stage_lint
+  image: *image_yamllint
+  script:
+    - 'yamllint -s .'
+black:
+  stage: *stage_lint
+  image: *image_black
+  script:
+    # The `--diff` will show any files that need to be fixed
+    # The `--check` will provide the failure, if encountered
+    - 'black --diff .'
+    - 'black --check -v .'
+hadolint:
+  stage: *stage_lint
+  image: *image_hadolint
+  script:
+    - 'find . -maxdepth 1 -type f -name "Dockerfile.*"
+                      | xargs hadolint'
+# commitlint:
+#   stage: *stage_lint
+#   image: *image_commitlint
+#   script:
+#     # Add `upstream` remote to get access to `upstream/master`
+#     - 'git remote add upstream
+#        https://gitlab.com/saltstack-formulas/infrastructure/salt-image-builder.git
+#        || true'
+#     - 'git fetch --all'
+#     # Run `commitlint`
+#     - 'commitlint --from "$(git merge-base upstream/master HEAD)"
+#                   --to   "${CI_COMMIT_SHA}"
+#                   --verbose'
+###############################################################################
+# Define `build` template (`allow_failure: false` -- implicit)
+###############################################################################
+.build_image_failure_forbidden: &build_image_failure_forbidden
+  stage: *stage_build
+  image: *image_dindpy3virtualenv
+  services: *services_docker_dind
+  variables:
+    CMD_SALT_CALL_VERSIONS_REPORT: 'salt-call --versions-report'
+    # yamllint disable-line rule:line-length
+    CMD_SALT_CALL_GRAINS_ITEM: 'salt-call --local grains.item init kernel kernelrelease kernelversion locale_info lsb_distrib_codename lsb_distrib_id lsb_distrib_release os os_family osarch osbuild oscodename osfinger osfullname osmajorrelease osmanufacturer osrelease osrelease_info osversion pythonexecutable pythonpath pythonversion saltpath saltversion saltversioninfo systemd virtual virtual_subtype zmqversion'
+    CMD_SALT_CALL_PKG_LIST_PKGS: 'salt-call --local pkg.list_pkgs'
+    CMD_SALT_CALL_PIP_LIST: 'salt-call --local pip.list'
+    CMD_SALT_CALL_LOCALE_LIST: 'salt-call --local locale.list_avail'
+    CMD_SALT_CALL_TEST_JINJA_GRAINS: 'salt-call --local state.sls test_jinja.grains'
+    CMD_SALT_CALL_TEST_JINJA_OPTS: 'salt-call --local state.sls test_jinja.opts'
+    CMD_SALT_CALL_TEST_JINJA_PILLAR: 'salt-call --local state.sls test_jinja.pillar'
+    CMD_SALT_CALL_TEST_JINJA_SALT: 'salt-call --local state.sls test_jinja.salt'
+  before_script:
+    # Set up the Python virtual environment used for testing the built image
+    - 'python3 -m venv venv'
+    - 'venv/bin/pip install -r requirements.txt'
+    # Prepare the tag to use when building the image
+    - |
+        if [ "${DN}" = "archlinux/archlinux" ]; then
+          export TAG=arch-base-latest
+        elif [ "${DN}" = "quay.io/centos/centos" ]; then
+          export TAG=centos-${DV}
+        else
+          export TAG=$(echo ${DN} | sed "s#/#-#g")-${DV}
+        fi
+    - 'echo "Building: ${TAG}"'
+    # Prepare the required variables for building the image
+    - 'export DOCKERHUB_IMAGE=salt-${SV}-py${PV}:${TAG}'
+    - 'export CMD_DOCKER_BUILD="docker build ."'
+    - 'export CACHE_FROM=${HARBOR_HOST}/${HARBOR_PROJECT}/${DOCKERHUB_IMAGE}'
+    # Source previous builds as a cache
+    - |
+        export CMD_DOCKER_BUILD="${CMD_DOCKER_BUILD} --cache-from ${CACHE_FROM}"
+        docker pull ${CACHE_FROM} || true
+    # Use workaround for openSUSE Tumbleweed
+    # (to allow Test Kitchen to access the container using an `ssh-rsa` public key)
+    # yamllint disable rule:line-length
+    - |
+        if [ "${DN}" = "opensuse/tumbleweed" ]; then
+          export CMD_DOCKER_BUILD="${CMD_DOCKER_BUILD} --build-arg=security-opt='seccomp=unconfined'"
+        fi
+    # yamllint enable rule:line-length
+    # Use workaround for Debian Bookworm (tag `12` isn't currently available)
+    - |
+        if [ "${DN}" = "debian" ] && [ "${DV}" = "12" ]; then
+          export DV=bookworm
+        fi
+    # Use `SVB` for passing through to the bootstrap
+    # This covers the previous situation of dealing with `.0` releases,
+    # which can now be passed via. `SVB` instead (rather than using `sed`)
+    - |
+        if [ "${SVB}" = "" ]; then
+          export SVB=${SV}
+        fi
+    # Allow overriding of SRU in future
+    - |
+        export SRU="-g https://github.com/saltstack/salt.git"
+    # Build the image
+    - '${CMD_DOCKER_BUILD}
+         --file "Dockerfile.${PI}"
+         --tag "${TAG}"
+         --build-arg DISTRO_NAME="${DN}"
+         --build-arg DISTRO_VERSION="${DV}"
+         --build-arg SALT_INSTALL_METHOD="${SIM}"
+         --build-arg SALT_VERSION="${SVB}"
+         --build-arg PYTHON_VERSION="${PV}"
+         --build-arg EXTRA_PACKAGES="${EP}"
+         --build-arg SALT_REPO_URL="${SRU}"
+         --build-arg CACHEBUST="$(date +%s)"'
+    # Run the test container
+    - 'export TESTINFRA_CONTAINER=testinfra-${TAG}-${PI}-${PV}-${SIM}-${SV}'
+    - 'docker run
+         --detach=true
+         --name "${TESTINFRA_CONTAINER}"
+         "${TAG}" tail -f /dev/null'
+    # Set up the variable and directory for capturing the versions of packages
+    # installed in the image
+    - 'export PKGS_VERSIONS_FILE=${PKGS_VERSIONS_DIR_WIP}${DOCKER_ENV_CI_JOB_NAME}.txt'
+    - 'mkdir -p ${PKGS_VERSIONS_DIR_WIP}'
+    # Capture the image name (first `tee` used without `-a`)
+    - 'echo "${DOCKER_ENV_CI_JOB_NAME}"
+         | tee ${PKGS_VERSIONS_FILE}'
+    # Capture the Salt install method
+    - 'echo "Salt install method: ${SIM}"
+         | tee -a ${PKGS_VERSIONS_FILE}'
+    # Capture the Salt versions report
+    - 'echo "# ${CMD_SALT_CALL_VERSIONS_REPORT}"
+         | tee -a ${PKGS_VERSIONS_FILE}'
+    - 'docker exec "${TESTINFRA_CONTAINER}" ${CMD_SALT_CALL_VERSIONS_REPORT}
+         | tee -a ${PKGS_VERSIONS_FILE}'
+    # Capture a list of selected grains
+    - 'echo "# ${CMD_SALT_CALL_GRAINS_ITEM}"
+         | tee -a ${PKGS_VERSIONS_FILE}'
+    - 'docker exec "${TESTINFRA_CONTAINER}" ${CMD_SALT_CALL_GRAINS_ITEM}
+         | tee -a ${PKGS_VERSIONS_FILE}'
+    # Capture the list of installed packages
+    - 'echo "# ${CMD_SALT_CALL_PKG_LIST_PKGS}"
+         | tee -a ${PKGS_VERSIONS_FILE}'
+    - 'docker exec "${TESTINFRA_CONTAINER}" ${CMD_SALT_CALL_PKG_LIST_PKGS}
+         | tee -a ${PKGS_VERSIONS_FILE}'
+    # Capture the list of `pip`-installed packages
+    - 'echo "# ${CMD_SALT_CALL_PIP_LIST}"
+         | tee -a ${PKGS_VERSIONS_FILE}'
+    - 'docker exec "${TESTINFRA_CONTAINER}" ${CMD_SALT_CALL_PIP_LIST}
+         | tee -a ${PKGS_VERSIONS_FILE}'
+    # Capture the list of locales available
+    - 'echo "# ${CMD_SALT_CALL_LOCALE_LIST}"
+         | tee -a ${PKGS_VERSIONS_FILE}'
+    - 'docker exec "${TESTINFRA_CONTAINER}" ${CMD_SALT_CALL_LOCALE_LIST}
+         | tee -a ${PKGS_VERSIONS_FILE}'
+    # Prepare the `test_jinja` state files
+    - 'docker exec "${TESTINFRA_CONTAINER}" mkdir -p /srv/salt/'
+    - 'docker cp test/test_jinja/ ${TESTINFRA_CONTAINER}:/srv/salt/test_jinja/'
+    # Run the `test_jinja` state files
+    - 'docker exec "${TESTINFRA_CONTAINER}" ${CMD_SALT_CALL_TEST_JINJA_GRAINS}
+       ; docker exec "${TESTINFRA_CONTAINER}" ${CMD_SALT_CALL_TEST_JINJA_OPTS}
+       ; docker exec "${TESTINFRA_CONTAINER}" ${CMD_SALT_CALL_TEST_JINJA_PILLAR}
+       ; docker exec "${TESTINFRA_CONTAINER}" ${CMD_SALT_CALL_TEST_JINJA_SALT}'
+    # Run the integration tests
+    # Not using `${SVB}` instead of `${SV}` here since the test file itself handles
+    # the any version number issues (e.g. the extra `.0` in the version number).
+    - 'venv/bin/pytest
+         --hosts="docker://${TESTINFRA_CONTAINER}"
+         test/integration
+         --pyvers "${PV}"
+         --saltvers "${SV}"
+         --installmethod "${SIM}"
+         -v'
+    # Stop and remove the test container
+    - 'docker stop "${TESTINFRA_CONTAINER}"'
+    - 'docker rm "${TESTINFRA_CONTAINER}"'
+  script: *script_dind_push_to_docker_hub
+  artifacts:
+    paths:
+      - '${PKGS_VERSIONS_DIR_WIP}'
+###############################################################################
+# Define `build` template (`allow_failure: true`)
+###############################################################################
+.build_image_failure_permitted:
+  <<: *build_image_failure_forbidden
+  allow_failure: true
+###############################################################################
+# `build` stage: `...`
+###############################################################################
+# VARS:
+# DN:  distro name (almalinux,       amazonlinux, archlinux,  centos,
+#                   centos (stream), debian,      fedora,     gentoo,
+#                   opensuse,        oraclelinux, rockylinux, ubuntu)
+# DV:  distro version
+# PI:  packages installer, used as dockerfile extension (apt, dnf, emg, pac, yum, zyp)
+# SIM: salt install method (git, onedir, stable)
+# SV:  salt version (master, nightly, 3006.2, 3005.2)
+# SVB: salt version used with `salt-bootstrap`, only if different from `SV` (latest)
+# PV:  python version (3)
+# EP:  extra packages required for the specific build
+# yamllint disable rule:commas rule:line-length
+# ALMALINUX
+# alma-09.0-nghtly-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'almalinux'            , DV: '9'      , PI: 'yum', SIM: 'onedir', SV: 'nghtly' , SVB: 'nightly', PV: '3', EP: 'glibc-langpack-en openssl-devel procps-ng python3 python3-devel'}}
+# alma-09.0-3006.2-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'almalinux'            , DV: '9'      , PI: 'yum', SIM: 'onedir', SV: '3006.2' , SVB: ''       , PV: '3', EP: 'glibc-langpack-en openssl-devel procps-ng python3 python3-devel'}}
+# alma-09.0-3005.2-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'almalinux'            , DV: '9'      , PI: 'yum', SIM: 'onedir', SV: '3005.2' , SVB: ''       , PV: '3', EP: 'glibc-langpack-en openssl-devel procps-ng python3 python3-devel'}}
+# alma-08.0-master-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'almalinux'            , DV: '8'      , PI: 'yum', SIM: 'git'   , SV: 'master' , SVB: ''       , PV: '3.11', EP: 'curl glibc-langpack-en openssl-devel procps-ng python3.11 python3.11-devel python3.11-pip swig'}}
+# alma-08.0-nghtly-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'almalinux'            , DV: '8'      , PI: 'yum', SIM: 'onedir', SV: 'nghtly' , SVB: 'nightly', PV: '3', EP: 'curl glibc-langpack-en openssl-devel procps-ng python3 python3-devel swig'}}
+# alma-08.0-3006.2-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'almalinux'            , DV: '8'      , PI: 'yum', SIM: 'onedir', SV: '3006.2' , SVB: ''       , PV: '3', EP: 'curl glibc-langpack-en openssl-devel procps-ng python3 python3-devel swig'}}
+# alma-08.0-3005.2-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'almalinux'            , DV: '8'      , PI: 'yum', SIM: 'onedir', SV: '3005.2' , SVB: ''       , PV: '3', EP: 'curl glibc-langpack-en openssl-devel procps-ng python3 python3-devel swig'}}
+# AMAZONLINUX
+# amaz-02.0-nghtly-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'amazonlinux'          , DV: '2'      , PI: 'yum', SIM: 'onedir', SV: 'nghtly' , SVB: 'nightly', PV: '3', EP: 'procps-ng yum-utils'}}
+# amaz-02.0-3006.2-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'amazonlinux'          , DV: '2'      , PI: 'yum', SIM: 'onedir', SV: '3006.2' , SVB: ''       , PV: '3', EP: 'procps-ng yum-utils'}}
+# amaz-02.0-3005.2-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'amazonlinux'          , DV: '2'      , PI: 'yum', SIM: 'onedir', SV: '3005.2' , SVB: ''       , PV: '3', EP: 'procps-ng yum-utils'}}
+# ARCHLINUX
+# Latest stable release (can flag out-of-date from this page): https://archlinux.org/packages/community/any/salt/
+# Since Python 3.10 was released, would require manual workarounds for Salt < `3004.2`, so no longer building those images
+# arch-late-master-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'archlinux/archlinux'  , DV: 'latest' , PI: 'pac', SIM: 'git', SV: 'master' , SVB: ''       , PV: '3', EP: ''}}
+# arch-late-3006.2-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'archlinux/archlinux'  , DV: 'latest' , PI: 'pac', SIM: 'git', SV: '3006.2' , SVB: 'v3006.2' , PV: '3', EP: 'python-jmespath python-psutil'}}
+# CENTOS (STREAM)
+# cstr-09.0-nghtly-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'quay.io/centos/centos', DV: 'stream9', PI: 'yum', SIM: 'onedir', SV: 'nghtly' , SVB: 'nightly', PV: '3', EP: 'glibc-langpack-en openssl-devel procps-ng python3 python3-devel'}}
+cstr-09.0-3006.2-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'quay.io/centos/centos', DV: 'stream9', PI: 'yum', SIM: 'onedir', SV: '3006.2' , SVB: ''       , PV: '3', EP: 'glibc-langpack-en openssl-devel procps-ng python3 python3-devel'}}
+# cstr-09.0-3005.2-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'quay.io/centos/centos', DV: 'stream9', PI: 'yum', SIM: 'onedir', SV: '3005.2' , SVB: ''       , PV: '3', EP: 'glibc-langpack-en openssl-devel procps-ng python3 python3-devel'}}
+cstr-08.0-master-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'quay.io/centos/centos', DV: 'stream8', PI: 'yum', SIM: 'git'   , SV: 'master' , SVB: ''       , PV: '3.11', EP: 'curl glibc-langpack-en openssl-devel procps-ng python3.11 python3.11-devel python3.11-pip swig'}}
+# cstr-08.0-nghtly-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'quay.io/centos/centos', DV: 'stream8', PI: 'yum', SIM: 'onedir', SV: 'nghtly' , SVB: 'nightly', PV: '3', EP: 'curl glibc-langpack-en openssl-devel procps-ng python3 python3-devel swig'}}
+cstr-08.0-3006.2-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'quay.io/centos/centos', DV: 'stream8', PI: 'yum', SIM: 'onedir', SV: '3006.2' , SVB: ''       , PV: '3', EP: 'curl glibc-langpack-en openssl-devel procps-ng python3 python3-devel swig'}}
+# cstr-08.0-3005.2-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'quay.io/centos/centos', DV: 'stream8', PI: 'yum', SIM: 'onedir', SV: '3005.2' , SVB: ''       , PV: '3', EP: 'curl glibc-langpack-en openssl-devel procps-ng python3 python3-devel swig'}}
+# CENTOS
+# cent-07.0-nghtly-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'centos'               , DV: '7'      , PI: 'yum', SIM: 'onedir', SV: 'nghtly' , SVB: 'nightly', PV: '3', EP: 'gcc-g++ openssl-devel python3 python3-devel swig zeromq zeromq-devel'}}
+cent-07.0-master-py3: {extends: '.build_image_failure_permitted', variables: {DN: 'centos'               , DV: '7'      , PI: 'yum', SIM: 'git', SV: 'master' , SVB: ''       , PV: '3', EP: 'gcc-g++ openssl-devel scl-utils rh-python38 rh-python38-python-devel swig zeromq zeromq-devel'}}
+cent-07.0-3006.2-py3: {extends: '.build_image_failure_permitted', variables: {DN: 'centos'               , DV: '7'      , PI: 'yum', SIM: 'onedir', SV: '3006.2' , SVB: ''       , PV: '3', EP: 'gcc-g++ openssl-devel scl-utils rh-python38 rh-python38-python-devel swig zeromq zeromq-devel'}}
+# cent-07.0-3005.2-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'centos'               , DV: '7'      , PI: 'yum', SIM: 'onedir', SV: '3005.2' , SVB: ''       , PV: '3', EP: 'gcc-g++ openssl-devel python3 python3-devel swig zeromq zeromq-devel'}}
+# DEBIAN
+debi-12.0-master-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'debian'               , DV: '12'     , PI: 'apt', SIM: 'git'   , SV: 'master' , SVB: ''       , PV: '3', EP: 'python3-apt python3-pip'}}
+debi-11.0-master-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'debian'               , DV: '11'     , PI: 'apt', SIM: 'git'   , SV: 'master' , SVB: ''       , PV: '3', EP: 'python3-apt python3-pip'}}
+# debi-11.0-nghtly-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'debian'               , DV: '11'     , PI: 'apt', SIM: 'onedir', SV: 'nghtly' , SVB: 'nightly', PV: '3', EP: ''}}
+debi-11.0-3006.2-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'debian'               , DV: '11'     , PI: 'apt', SIM: 'onedir', SV: '3006.2' , SVB: ''       , PV: '3', EP: ''}}
+# debi-11.0-3005.2-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'debian'               , DV: '11'     , PI: 'apt', SIM: 'onedir', SV: '3005.2' , SVB: ''       , PV: '3', EP: ''}}
+# debi-10.0-nghtly-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'debian'               , DV: '10'     , PI: 'apt', SIM: 'onedir', SV: 'nghtly' , SVB: 'nightly', PV: '3', EP: ''}}
+debi-10.0-master-py3: {extends: '.build_image_failure_permitted', variables: {DN: 'debian'               , DV: '10'     , PI: 'apt', SIM: 'git', SV: 'master' , SVB: ''       , PV: '3', EP: 'python3-apt python3-pip'}}
+debi-10.0-3006.2-py3: {extends: '.build_image_failure_permitted', variables: {DN: 'debian'               , DV: '10'     , PI: 'apt', SIM: 'onedir', SV: '3006.2' , SVB: ''       , PV: '3', EP: ''}}
+# debi-10.0-3005.2-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'debian'               , DV: '10'     , PI: 'apt', SIM: 'onedir', SV: '3005.2' , SVB: ''       , PV: '3', EP: ''}}
+# FEDORA
+# For Fedora, `stable` builds only appear to work with `latest` but that doesn't guarantee the actual latest version of Salt
+# * Fedora 38: `3005.X`
+# * Fedora 37: `3005.X`
+# * Fedora 36: `3005.X`
+# Use for both accordingly in order to test against these latest available packages
+# Progress for new releases is visible here: https://bodhi.fedoraproject.org/updates/?search=salt
+# Git-based installs aren't currently working on Fedora 37+, so commented out below
+# fedo-38.0-master-py3: {extends: '.build_image_failure_permitted', variables: {DN: 'fedora'               , DV: '38'     , PI: 'dnf', SIM: 'git'   , SV: 'master' , SVB: ''       , PV: '3', EP: ''}}
+# fedo-38.0-3006.2-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'fedora'               , DV: '38'     , PI: 'dnf', SIM: 'stable', SV: '3006.2' , SVB: 'latest' , PV: '3', EP: ''}}
+# fedo-37.0-master-py3: {extends: '.build_image_failure_permitted', variables: {DN: 'fedora'               , DV: '37'     , PI: 'dnf', SIM: 'git'   , SV: 'master' , SVB: ''       , PV: '3', EP: ''}}
+# fedo-37.0-3006.2-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'fedora'               , DV: '37'     , PI: 'dnf', SIM: 'stable', SV: '3006.2' , SVB: 'latest' , PV: '3', EP: ''}}
+# fedo-36.0-master-py3: {extends: '.build_image_failure_permitted', variables: {DN: 'fedora'               , DV: '36'     , PI: 'dnf', SIM: 'git'   , SV: 'master' , SVB: ''       , PV: '3', EP: ''}}
+# fedo-36.0-3006.2-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'fedora'               , DV: '36'     , PI: 'dnf', SIM: 'stable', SV: '3006.2' , SVB: 'latest' , PV: '3', EP: ''}}
+# GENTOO
+# Available versions: https://packages.gentoo.org/packages/app-admin/salt
+# gent-late-master-py3: {extends: '.build_image_failure_permitted', variables: {DN: 'gentoo/stage3'        , DV: 'latest' , PI: 'emg', SIM: 'git', SV: 'master' , SVB: ''       , PV: '3', EP: ''}}
+# gent-late-3006.2-py3: {extends: '.build_image_failure_permitted', variables: {DN: 'gentoo/stage3'        , DV: 'latest' , PI: 'emg', SIM: 'git', SV: '3006.2' , SVB: 'v3006.2'       , PV: '3', EP: ''}}
+# gent-sysd-master-py3: {extends: '.build_image_failure_permitted', variables: {DN: 'gentoo/stage3'        , DV: 'systemd', PI: 'emg', SIM: 'git', SV: 'master' , SVB: ''       , PV: '3', EP: ''}}
+# gent-sysd-3006.2-py3: {extends: '.build_image_failure_permitted', variables: {DN: 'gentoo/stage3'        , DV: 'systemd', PI: 'emg', SIM: 'git', SV: '3006.2' , SVB: 'v3006.2'       , PV: '3', EP: ''}}
+# OPENSUSE
+# For openSUSE, the bootstrap script only allows `latest` to be built using `stable`
+# Use for both Leap and Tumbleweed in order to test against these latest available packages
+# Note: Permitting failure on Tumbleweed until https://bugzilla.opensuse.org/show_bug.cgi?id=1190670 is resolved (similar situation to Fedora 35+)
+# opsu-tmbl-master-py3: {extends: '.build_image_failure_permitted', variables: {DN: 'opensuse/tumbleweed'  , DV: 'latest' , PI: 'zyp', SIM: 'git'   , SV: 'master' , SVB: ''       , PV: '3', EP: 'python3-pip'}}
+opsu-15.5-master-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'opensuse/leap'        , DV: '15.5'   , PI: 'zyp', SIM: 'git'   , SV: 'master' , SVB: ''       , PV: '3.11', EP: 'python311-pip'}}
+opsu-15.4-master-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'opensuse/leap'        , DV: '15.4'   , PI: 'zyp', SIM: 'git'   , SV: 'master' , SVB: ''       , PV: '3.10', EP: 'python310-pip'}}
+# ORACLELINUX
+orac-09.0-master-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'oraclelinux'          , DV: '9'      , PI: 'yum', SIM: 'git', SV: 'master' , SVB: ''          , PV: '3', EP: 'glibc-langpack-en openssl-devel python3 python3-devel'}}
+orac-09.0-3006.2-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'oraclelinux'          , DV: '9'      , PI: 'yum', SIM: 'onedir', SV: '3006.2' , SVB: ''       , PV: '3', EP: 'glibc-langpack-en openssl-devel python3 python3-devel'}}
+# orac-09.0-3005.2-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'oraclelinux'          , DV: '9'      , PI: 'yum', SIM: 'onedir', SV: '3005.2' , SVB: ''       , PV: '3', EP: 'glibc-langpack-en openssl-devel python3 python3-devel'}}
+orac-08.0-master-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'oraclelinux'          , DV: '8'      , PI: 'yum', SIM: 'git'   , SV: 'master' , SVB: ''       , PV: '3.11', EP: 'curl glibc-langpack-en openssl-devel python3.11 python3.11-devel python3.11-pip swig'}}
+# orac-08.0-nghtly-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'oraclelinux'          , DV: '8'      , PI: 'yum', SIM: 'onedir', SV: 'nghtly' , SVB: 'nightly', PV: '3', EP: 'curl glibc-langpack-en openssl-devel python3 python3-devel swig'}}
+orac-08.0-3006.2-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'oraclelinux'          , DV: '8'      , PI: 'yum', SIM: 'onedir', SV: '3006.2' , SVB: ''       , PV: '3', EP: 'curl glibc-langpack-en openssl-devel python3 python3-devel swig'}}
+# orac-08.0-3005.2-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'oraclelinux'          , DV: '8'      , PI: 'yum', SIM: 'onedir', SV: '3005.2' , SVB: ''       , PV: '3', EP: 'curl glibc-langpack-en openssl-devel python3 python3-devel swig'}}
+# orac-07.0-nghtly-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'oraclelinux'          , DV: '7'      , PI: 'yum', SIM: 'onedir', SV: 'nghtly' , SVB: 'nightly', PV: '3', EP: 'gcc-g++ openssl-devel python3 python3-devel swig zeromq zeromq-devel'}}
+orac-07.0-master-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'oraclelinux'          , DV: '7'      , PI: 'yum', SIM: 'git', SV: 'master' , SVB: ''       , PV: '3', EP: 'gcc-g++ openssl-devel scl-utils rh-python38 rh-python38-python-devel swig zeromq zeromq-devel'}}
+orac-07.0-3006.2-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'oraclelinux'          , DV: '7'      , PI: 'yum', SIM: 'onedir', SV: '3006.2' , SVB: ''       , PV: '3', EP: 'gcc-g++ openssl-devel scl-utils rh-python38 rh-python38-python-devel swig zeromq zeromq-devel'}}
+# orac-07.0-3005.2-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'oraclelinux'          , DV: '7'      , PI: 'yum', SIM: 'onedir', SV: '3005.2' , SVB: ''       , PV: '3', EP: 'gcc-g++ openssl-devel python3 python3-devel swig zeromq zeromq-devel'}}
+# ROCKYLINUX
+# rock-09.0-nghtly-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'rockylinux'           , DV: '9'      , PI: 'yum', SIM: 'onedir', SV: 'nghtly' , SVB: 'nightly', PV: '3', EP: 'findutils glibc-langpack-en openssl-devel procps-ng python3 python3-devel'}}
+# rock-09.0-3006.2-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'rockylinux'           , DV: '9'      , PI: 'yum', SIM: 'onedir', SV: '3006.2' , SVB: ''       , PV: '3', EP: 'findutils glibc-langpack-en openssl-devel procps-ng python3 python3-devel'}}
+# rock-09.0-3005.2-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'rockylinux'           , DV: '9'      , PI: 'yum', SIM: 'onedir', SV: '3005.2' , SVB: ''       , PV: '3', EP: 'findutils glibc-langpack-en openssl-devel procps-ng python3 python3-devel'}}
+# rock-08.0-master-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'rockylinux'           , DV: '8'      , PI: 'yum', SIM: 'git'   , SV: 'master' , SVB: ''       , PV: '3.11', EP: 'curl findutils glibc-langpack-en openssl-devel procps-ng python3.11 python3.11-devel python3.11-pip swig'}}
+# rock-08.0-nghtly-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'rockylinux'           , DV: '8'      , PI: 'yum', SIM: 'onedir', SV: 'nghtly' , SVB: 'nightly', PV: '3', EP: 'curl findutils glibc-langpack-en openssl-devel procps-ng python3 python3-devel swig'}}
+# rock-08.0-3006.2-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'rockylinux'           , DV: '8'      , PI: 'yum', SIM: 'onedir', SV: '3006.2' , SVB: ''       , PV: '3', EP: 'curl findutils glibc-langpack-en openssl-devel procps-ng python3 python3-devel swig'}}
+# rock-08.0-3005.2-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'rockylinux'           , DV: '8'      , PI: 'yum', SIM: 'onedir', SV: '3005.2' , SVB: ''       , PV: '3', EP: 'curl findutils glibc-langpack-en openssl-devel procps-ng python3 python3-devel swig'}}
+# UBUNTU
+ubun-22.0-master-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'ubuntu'               , DV: '22.04'  , PI: 'apt', SIM: 'git'   , SV: 'master' , SVB: ''       , PV: '3', EP: 'python3-apt python3-pip'}}
+# ubun-22.0-nghtly-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'ubuntu'               , DV: '22.04'  , PI: 'apt', SIM: 'onedir', SV: 'nghtly' , SVB: 'nightly', PV: '3', EP: ''}}
+ubun-22.0-3006.2-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'ubuntu'               , DV: '22.04'  , PI: 'apt', SIM: 'onedir', SV: '3006.2' , SVB: ''       , PV: '3', EP: ''}}
+# ubun-22.0-3005.2-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'ubuntu'               , DV: '22.04'  , PI: 'apt', SIM: 'onedir', SV: '3005.2' , SVB: ''       , PV: '3', EP: ''}}
+ubun-20.0-master-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'ubuntu'               , DV: '20.04'  , PI: 'apt', SIM: 'git'   , SV: 'master' , SVB: ''       , PV: '3', EP: 'python3-apt python3-pip'}}
+# ubun-20.0-nghtly-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'ubuntu'               , DV: '20.04'  , PI: 'apt', SIM: 'onedir', SV: 'nghtly' , SVB: 'nightly', PV: '3', EP: ''}}
+ubun-20.0-3006.2-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'ubuntu'               , DV: '20.04'  , PI: 'apt', SIM: 'onedir', SV: '3006.2' , SVB: ''       , PV: '3', EP: ''}}
+# ubun-20.0-3005.2-py3: {extends: '.build_image_failure_forbidden', variables: {DN: 'ubuntu'               , DV: '20.04'  , PI: 'apt', SIM: 'onedir', SV: '3005.2' , SVB: ''       , PV: '3', EP: ''}}
+# yamllint enable rule:commas rule:line-length
+###############################################################################
+# `release` stage: `semantic-release`
+###############################################################################
+semantic-release:
+  only: *only_branch_master_parent_repo
+  stage: *stage_release
+  image: *image_semanticrelease
+  script:
+    - 'mv -f ${PKGS_VERSIONS_DIR_WIP}*.txt ${PKGS_VERSIONS_DIR}'
+    - 'semantic-release'
+```
